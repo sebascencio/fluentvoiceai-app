@@ -57,13 +57,28 @@ RESPONSE STRUCTURE:
 
 CRITICAL: Never use labels like "Feedback:", "Correction:" or "Notes:". Speak as a real teacher would in a friendly chat.`;
 
+    // Filtrar solo mensajes con roles válidos y contenido no vacío
+    const validRoles = ['user', 'assistant'];
+    const filteredMessages = messages
+      .filter((m: any) => validRoles.includes(m.role) && m.content?.trim())
+      .map((m: any) => ({
+        role: m.role as 'user' | 'assistant',
+        content: String(m.content).trim()
+      }));
+
     const groqMessages = [
       { role: 'system' as const, content: systemPrompt },
-      ...messages.map((m: any) => ({
-        role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: String(m.content || '')
-      }))
+      ...filteredMessages
     ];
+
+    const requestBody = {
+      model: 'llama-3.3-70b-versatile',
+      messages: groqMessages,
+      temperature: 0.7,
+      max_tokens: 800,
+    };
+
+    console.log('[Chat API] Enviando a Groq:', JSON.stringify(requestBody, null, 2));
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -71,12 +86,7 @@ CRITICAL: Never use labels like "Feedback:", "Correction:" or "Notes:". Speak as
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'llama3-70b-8192',
-        messages: groqMessages,
-        temperature: 0.7,
-        max_tokens: 800,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
