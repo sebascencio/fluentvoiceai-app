@@ -27,6 +27,8 @@ function getFallbackResponse(userName: string, userLevel: string, lastMessage: s
 }
 
 export async function POST(req: Request) {
+  console.log("[v0] Llave detectada:", !!process.env.GROQ_API_KEY)
+  
   try {
     const { messages, userLevel, userName } = await req.json();
     const lastUserMessage = messages.filter((m: any) => m.role === 'user').pop()?.content || ''
