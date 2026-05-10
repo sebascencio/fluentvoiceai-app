@@ -27,8 +27,6 @@ function getFallbackResponse(userName: string, userLevel: string, lastMessage: s
 }
 
 export async function POST(req: Request) {
-  console.log("[v0] Llave detectada:", !!process.env.GROQ_API_KEY)
-  
   try {
     const { messages, userLevel = 'A2', userName = 'Student' } = await req.json();
     
@@ -41,9 +39,8 @@ export async function POST(req: Request) {
 
     const lastUserMessage = messages.filter((m: any) => m.role === 'user').pop()?.content || '';
 
-    // Si no hay API key, usar respuestas de fallback
+    // Si no hay API key, usar respuestas de fallback inteligentes
     if (!process.env.GROQ_API_KEY) {
-      console.warn('[Chat API] GROQ_API_KEY no configurada, usando respuestas de fallback');
       return NextResponse.json({
         content: getFallbackResponse(userName, userLevel, lastUserMessage),
         role: 'assistant'
@@ -51,28 +48,22 @@ export async function POST(req: Request) {
     }
 
     // Preparar mensajes para Groq con formato correcto
-    const systemPrompt = `Eres Sarah, una tutora de inglés muy humana y cercana. Hablas con ${userName}, nivel ${userLevel}.
+    const systemPrompt = `You are Sarah, a warm and friendly English tutor. You're talking with ${userName}, who is at ${userLevel} level.
 
-ESTRUCTURA DE TU RESPUESTA:
-1. Responde primero en inglés a lo que el usuario dijo, manteniendo la conversación natural y adaptada al nivel ${userLevel}.
-2. Inmediatamente después, si hubo un error, añade un párrafo breve en ESPAÑOL que empiece de forma natural, por ejemplo: "Por cierto, una pequeña observación...", "Estuvo genial, solo que...", o "Un tip rápido sobre lo que dijiste...".
-3. Menciona la palabra o frase en inglés que se debe corregir y explica por qué en español.
+RESPONSE STRUCTURE:
+1. First, respond in English to what the user said, keeping the conversation natural and adapted to ${userLevel} level.
+2. If there was a grammar or vocabulary mistake, add a brief paragraph IN SPANISH starting naturally like: "Por cierto, una pequeña observación...", "Estuvo genial, solo que...", or "Un tip rápido sobre lo que dijiste...".
+3. In Spanish, mention the English word or phrase that needs correction and explain why.
 
-REGLA CRÍTICA: No uses etiquetas como "Feedback:", "Corrección:" o "Notas:". Habla como lo haría una profesora real en una charla amistosa.`;
+CRITICAL: Never use labels like "Feedback:", "Correction:" or "Notes:". Speak as a real teacher would in a friendly chat.`;
 
     const groqMessages = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system' as const, content: systemPrompt },
       ...messages.map((m: any) => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content || ''
+        role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: String(m.content || '')
       }))
     ];
-
-    console.log('[Chat API] Enviando a Groq:', {
-      model: 'llama-3.3-70b-versatile',
-      messagesCount: groqMessages.length,
-      hasApiKey: !!process.env.GROQ_API_KEY
-    });
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -81,28 +72,24 @@ REGLA CRÍTICA: No uses etiquetas como "Feedback:", "Corrección:" o "Notas:". H
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'llama3-70b-8192',
         messages: groqMessages,
         temperature: 0.7,
-        max_tokens: 1000,
+        max_tokens: 800,
       }),
     });
 
-    const responseText = await response.text();
-    
     if (!response.ok) {
-      console.error('[Chat API] Groq error response:', responseText);
-      throw new Error(`Groq API error: ${response.status} - ${responseText}`);
+      const errorText = await response.text();
+      console.error('[Chat API] Groq error:', response.status, errorText);
+      // Usar fallback en caso de error
+      return NextResponse.json({
+        content: getFallbackResponse(userName, userLevel, lastUserMessage),
+        role: 'assistant'
+      });
     }
 
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      console.error('[Chat API] Error parsing JSON:', responseText);
-      throw new Error('Invalid JSON response from Groq');
-    }
-
+    const data = await response.json();
     const content = data.choices?.[0]?.message?.content || getFallbackResponse(userName, userLevel, lastUserMessage);
     
     return NextResponse.json({
@@ -110,7 +97,7 @@ REGLA CRÍTICA: No uses etiquetas como "Feedback:", "Corrección:" o "Notas:". H
       role: 'assistant'
     });
   } catch (error) {
-    console.error('[Chat API] Error:', error instanceof Error ? error.message : String(error));
+    console.error('[Chat API] Error:', error);
     return NextResponse.json({ 
       content: "I'm sorry, I had a small technical issue. Could you please try again?", 
       role: 'assistant' 

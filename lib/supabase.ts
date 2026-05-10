@@ -8,12 +8,8 @@ let supabase: SupabaseClient | null = null
 
 if (supabaseUrl && supabaseAnonKey) {
   supabase = createClient(supabaseUrl, supabaseAnonKey)
-} else {
-  console.warn(
-    '[Supabase] Variables de entorno no configuradas. ' +
-    'Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en tu archivo .env.local'
-  )
 }
+// Nota: No mostramos warning aquí para evitar spam en consola
 
 // Helper para verificar si Supabase está disponible
 export function isSupabaseConfigured(): boolean {

@@ -50,19 +50,31 @@ export function ConversationContent() {
   // Cargar perfil desde Supabase al entrar (solo si está configurado)
   useEffect(() => {
     async function loadData() {
-      if (!isSupabaseConfigured() || !supabase) return
+      // Solo intentar cargar si Supabase está configurado y el cliente existe
+      if (!isSupabaseConfigured()) {
+        return
+      }
+      
+      // Obtener cliente de forma segura
+      const client = supabase
+      if (!client) {
+        return
+      }
       
       try {
-        const { data: profile } = await supabase.from('profiles').select('*').single()
+        const { data: profile, error } = await client.from('profiles').select('*').single()
+        if (error) {
+          // Silenciar errores de tabla no existente o sin datos
+          return
+        }
         if (profile) {
           setProfile({ 
             name: profile.full_name || "Usuario", 
             level: profile.english_level || "A2" 
           })
         }
-      } catch (error) {
-        // Silenciar error si la tabla no existe aún
-        console.warn('[Supabase] No se pudo cargar el perfil:', error)
+      } catch {
+        // Silenciar cualquier error de conexión
       }
     }
     loadData()
