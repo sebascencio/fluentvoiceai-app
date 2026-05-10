@@ -39,6 +39,7 @@ export function ConversationContent() {
   }, [messages])
 
   const handleSend = async () => {
+    console.log("[v0] handleSend called, inputValue:", inputValue, "isLoading:", isLoading)
     if (!inputValue.trim() || isLoading) return
 
     const userContent = inputValue
@@ -198,14 +199,20 @@ export function ConversationContent() {
               >
                 <Mic className="w-5 h-5" />
               </Button>
-              <Input
+              <input
+                type="text"
                 value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyPress}
+                onChange={(e) => {
+                  console.log("[v0] Input onChange:", e.target.value)
+                  setInputValue(e.target.value)
+                }}
+                onKeyDown={(e) => {
+                  console.log("[v0] Input onKeyDown:", e.key)
+                  handleKeyPress(e)
+                }}
                 placeholder={isLoading ? "Sarah está escribiendo..." : "Escribe tu mensaje en inglés..."}
-                className="flex-1 rounded-xl"
+                className="flex-1 rounded-xl px-4 py-2 border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 disabled={isRecording || isLoading}
-                suppressHydrationWarning
               />
               <Button
                 onClick={handleSend}
