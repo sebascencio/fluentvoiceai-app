@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input"
 import { ChatMessage } from "@/components/custom/chat-message"
 import { AvatarPlaceholder } from "@/components/custom/avatar-placeholder"
 import { cn } from "@/lib/utils"
-import { supabase, isSupabaseConfigured } from "@/lib/supabase"
 
 type AvatarState = "idle" | "listening" | "speaking"
 
@@ -19,9 +18,6 @@ interface Message {
 }
 
 export function ConversationContent() {
-  // Estado de montaje para evitar hydration mismatch
-  const [isMounted, setIsMounted] = useState(false)
-  
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState("")
   const [avatarState, setAvatarState] = useState<AvatarState>("idle")
@@ -29,15 +25,10 @@ export function ConversationContent() {
   const [isRecording, setIsRecording] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   
-  // Perfil dinámico
-  const [userProfile, setProfile] = useState({ name: "Usuario", level: "A2" })
+  // Perfil del usuario
+  const userProfile = { name: "Usuario", level: "A2" }
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  // Marcar como montado en el cliente
-  useEffect(() => {
-    setIsMounted(true)
-  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -47,50 +38,11 @@ export function ConversationContent() {
     scrollToBottom()
   }, [messages])
 
-  // Cargar perfil desde Supabase al entrar (solo si está configurado)
-  useEffect(() => {
-    async function loadData() {
-      // Solo intentar cargar si Supabase está configurado y el cliente existe
-      if (!isSupabaseConfigured()) {
-        return
-      }
-      
-      // Obtener cliente de forma segura
-      const client = supabase
-      if (!client) {
-        return
-      }
-      
-      try {
-        const { data: profile, error } = await client.from('profiles').select('*').single()
-        if (error) {
-          // Silenciar errores de tabla no existente o sin datos
-          return
-        }
-        if (profile) {
-          setProfile({ 
-            name: profile.full_name || "Usuario", 
-            level: profile.english_level || "A2" 
-          })
-        }
-      } catch {
-        // Silenciar cualquier error de conexión
-      }
-    }
-    loadData()
-  }, [])
-
-  // Función para formatear timestamp de forma segura (solo en cliente)
-  const getTimestamp = (): string => {
-    if (!isMounted) return ""
-    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  }
-
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return
 
     const userContent = inputValue
-    const timestamp = getTimestamp()
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
     const newUserMessage: Message = {
       id: Date.now(),
@@ -105,17 +57,16 @@ export function ConversationContent() {
     setAvatarState("speaking")
 
     try {
-      // Llamada REAL a nuestra API de Sarah
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: [
-            ...messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({
+            ...messages.map((m) => ({
               role: m.role,
               content: m.content,
             })),
-            newUserMessage
+            { role: "user", content: userContent }
           ],
           userName: userProfile.name,
           userLevel: userProfile.level
@@ -128,19 +79,18 @@ export function ConversationContent() {
         id: Date.now() + 1,
         role: "assistant",
         content: data.content || "Lo siento, hubo un problema. Intenta de nuevo.",
-        timestamp: getTimestamp(),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
 
       setMessages(prev => [...prev, botResponse])
     } catch (error) {
       console.error("Error con Sarah:", error)
       
-      // Mensaje de error amigable
       const errorResponse: Message = {
         id: Date.now() + 1,
         role: "assistant",
         content: "Sorry, I'm having trouble connecting. Please try again in a moment.",
-        timestamp: getTimestamp(),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
       setMessages(prev => [...prev, errorResponse])
     } finally {
@@ -170,23 +120,8 @@ export function ConversationContent() {
     }
   }
 
-  // Skeleton mientras se monta para evitar hydration mismatch
-  if (!isMounted) {
-    return (
-      <div className="animate-fade-in h-[calc(100vh-8rem)] md:h-[calc(100vh-6rem)] flex flex-col">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <div className="h-7 w-40 bg-muted rounded animate-pulse" />
-            <div className="h-4 w-64 bg-muted rounded mt-2 animate-pulse" />
-          </div>
-        </div>
-        <div className="flex-1 bg-card rounded-2xl animate-pulse" />
-      </div>
-    )
-  }
-
   return (
-    <div className="animate-fade-in h-[calc(100vh-8rem)] md:h-[calc(100vh-6rem)] flex flex-col">
+    <div className="h-[calc(100vh-8rem)] md:h-[calc(100vh-6rem)] flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -270,6 +205,7 @@ export function ConversationContent() {
                 placeholder={isLoading ? "Sarah está escribiendo..." : "Escribe tu mensaje en inglés..."}
                 className="flex-1 rounded-xl"
                 disabled={isRecording || isLoading}
+                suppressHydrationWarning
               />
               <Button
                 onClick={handleSend}
