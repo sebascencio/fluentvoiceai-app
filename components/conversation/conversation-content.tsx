@@ -3,18 +3,29 @@
 import { useState, useRef, useEffect } from "react"
 import { Send, Mic, Volume2, VolumeX } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { ChatMessage } from "@/components/custom/chat-message"
 import { AvatarPlaceholder } from "@/components/custom/avatar-placeholder"
 import { cn } from "@/lib/utils"
+import { createClient } from "@/lib/supabase/client"
 
 type AvatarState = "idle" | "listening" | "speaking"
 
 interface Message {
-  id: number
+  id: string
   role: "user" | "assistant"
   content: string
   timestamp: string
+}
+
+// Generar o recuperar session_id del localStorage
+function getSessionId(): string {
+  if (typeof window === 'undefined') return ''
+  let sessionId = localStorage.getItem('english_tutor_session_id')
+  if (!sessionId) {
+    sessionId = crypto.randomUUID()
+    localStorage.setItem('english_tutor_session_id', sessionId)
+  }
+  return sessionId
 }
 
 export function ConversationContent() {
@@ -24,11 +35,14 @@ export function ConversationContent() {
   const [voiceEnabled, setVoiceEnabled] = useState(true)
   const [isRecording, setIsRecording] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [sessionId, setSessionId] = useState<string>("")
   
   // Perfil del usuario
   const userProfile = { name: "Usuario", level: "A2" }
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const supabase = createClient()
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -38,15 +52,109 @@ export function ConversationContent() {
     scrollToBottom()
   }, [messages])
 
+  // Inicializar session_id y cargar conversación existente
+  useEffect(() => {
+    const sid = getSessionId()
+    setSessionId(sid)
+    
+    async function loadConversation() {
+      if (!sid) return
+      
+      try {
+        // Buscar conversación existente para esta sesión
+        const { data: existingConv, error: convError } = await supabase
+          .from('conversations')
+          .select('id')
+          .eq('session_id', sid)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (existingConv && !convError) {
+          setConversationId(existingConv.id)
+          
+          // Cargar mensajes de la conversación
+          const { data: existingMessages } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('conversation_id', existingConv.id)
+            .order('created_at', { ascending: true })
+
+          if (existingMessages && existingMessages.length > 0) {
+            const formattedMessages: Message[] = existingMessages.map((m) => ({
+              id: m.id,
+              role: m.role as "user" | "assistant",
+              content: m.content,
+              timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }))
+            setMessages(formattedMessages)
+          }
+        }
+      } catch (error) {
+        // Si no hay conversación existente, está bien - se creará una nueva
+      }
+    }
+    
+    loadConversation()
+  }, [])
+
+  // Crear conversación si no existe
+  async function ensureConversation(): Promise<string | null> {
+    if (conversationId) return conversationId
+    
+    try {
+      const { data, error } = await supabase
+        .from('conversations')
+        .insert({
+          session_id: sessionId,
+          title: 'Conversación con Sarah'
+        })
+        .select('id')
+        .single()
+
+      if (error) throw error
+      if (data) {
+        setConversationId(data.id)
+        return data.id
+      }
+    } catch (error) {
+      console.error('Error creating conversation:', error)
+    }
+    return null
+  }
+
+  // Guardar mensaje en Supabase
+  async function saveMessage(convId: string, role: "user" | "assistant", content: string): Promise<string | null> {
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: convId,
+          role,
+          content
+        })
+        .select('id')
+        .single()
+
+      if (error) throw error
+      return data?.id || null
+    } catch (error) {
+      console.error('Error saving message:', error)
+      return null
+    }
+  }
+
   const handleSend = async () => {
-    console.log("[v0] handleSend called, inputValue:", inputValue, "isLoading:", isLoading)
     if (!inputValue.trim() || isLoading) return
 
     const userContent = inputValue
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
+    // Asegurar que existe la conversación
+    const convId = await ensureConversation()
+
     const newUserMessage: Message = {
-      id: Date.now(),
+      id: crypto.randomUUID(),
       role: "user",
       content: userContent,
       timestamp: timestamp,
@@ -56,6 +164,14 @@ export function ConversationContent() {
     setInputValue("")
     setIsLoading(true)
     setAvatarState("speaking")
+
+    // Guardar mensaje del usuario en Supabase
+    if (convId) {
+      const savedId = await saveMessage(convId, "user", userContent)
+      if (savedId) {
+        newUserMessage.id = savedId
+      }
+    }
 
     try {
       const response = await fetch('/api/chat', {
@@ -76,11 +192,20 @@ export function ConversationContent() {
 
       const data = await response.json()
       
+      const botContent = data.content || "Lo siento, hubo un problema. Intenta de nuevo."
       const botResponse: Message = {
-        id: Date.now() + 1,
+        id: crypto.randomUUID(),
         role: "assistant",
-        content: data.content || "Lo siento, hubo un problema. Intenta de nuevo.",
+        content: botContent,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+
+      // Guardar respuesta de Sarah en Supabase
+      if (convId) {
+        const savedBotId = await saveMessage(convId, "assistant", botContent)
+        if (savedBotId) {
+          botResponse.id = savedBotId
+        }
       }
 
       setMessages(prev => [...prev, botResponse])
@@ -88,7 +213,7 @@ export function ConversationContent() {
       console.error("Error con Sarah:", error)
       
       const errorResponse: Message = {
-        id: Date.now() + 1,
+        id: crypto.randomUUID(),
         role: "assistant",
         content: "Sorry, I'm having trouble connecting. Please try again in a moment.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -202,14 +327,8 @@ export function ConversationContent() {
               <input
                 type="text"
                 value={inputValue}
-                onChange={(e) => {
-                  console.log("[v0] Input onChange:", e.target.value)
-                  setInputValue(e.target.value)
-                }}
-                onKeyDown={(e) => {
-                  console.log("[v0] Input onKeyDown:", e.key)
-                  handleKeyPress(e)
-                }}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={handleKeyPress}
                 placeholder={isLoading ? "Sarah está escribiendo..." : "Escribe tu mensaje en inglés..."}
                 className="flex-1 rounded-xl px-4 py-2 border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 disabled={isRecording || isLoading}
