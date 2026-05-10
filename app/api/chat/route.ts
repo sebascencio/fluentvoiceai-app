@@ -27,8 +27,11 @@ function getFallbackResponse(userName: string, userLevel: string, lastMessage: s
 }
 
 export async function POST(req: Request) {
+  console.log('[Chat API] POST request recibido')
   try {
-    const { messages, userLevel = 'A2', userName = 'Student' } = await req.json();
+    const body = await req.json();
+    console.log('[Chat API] Body parseado:', JSON.stringify(body).substring(0, 200))
+    const { messages, userLevel = 'A2', userName = 'Student' } = body;
     
     if (!Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
@@ -78,7 +81,9 @@ CRITICAL: Never use labels like "Feedback:", "Correction:" or "Notes:". Speak as
       max_tokens: 800,
     };
 
-    console.log('[Chat API] Enviando a Groq:', JSON.stringify(requestBody, null, 2));
+    console.log('[Chat API] Body a enviar - modelo:', requestBody.model, 'mensajes:', groqMessages.length);
+    console.log('[Chat API] Primer mensaje (system):', groqMessages[0]?.content?.substring(0, 80));
+    console.log('[Chat API] Último mensaje:', groqMessages[groqMessages.length - 1]);
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -91,8 +96,10 @@ CRITICAL: Never use labels like "Feedback:", "Correction:" or "Notes:". Speak as
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Chat API] Groq error:', response.status, errorText);
-      // Usar fallback en caso de error
+      console.error('[Chat API] Groq error 400:', response.status);
+      console.error('[Chat API] Error response:', errorText.substring(0, 200));
+      console.warn('[Chat API] Usando fallback response');
+      // Usar fallback silenciosamente sin lanzar error
       return NextResponse.json({
         content: getFallbackResponse(userName, userLevel, lastUserMessage),
         role: 'assistant'
