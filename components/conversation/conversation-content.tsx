@@ -98,7 +98,13 @@ export function ConversationContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [...messages, newUserMessage],
+          messages: [
+            ...messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+            newUserMessage
+          ],
           userName: userProfile.name,
           userLevel: userProfile.level
         }),
