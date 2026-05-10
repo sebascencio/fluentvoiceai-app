@@ -6,17 +6,23 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ChatMessage } from "@/components/custom/chat-message"
 import { AvatarPlaceholder } from "@/components/custom/avatar-placeholder"
-import { chatMessages } from "@/lib/mockData"
 import { cn } from "@/lib/utils"
+import { supabase } from "@/lib/supabase" // Tu conexión a Supabase
 
 type AvatarState = "idle" | "listening" | "speaking"
 
 export function ConversationContent() {
-  const [messages, setMessages] = useState(chatMessages)
+  // 1. Iniciamos con mensajes vacíos (luego los traeremos de la DB)
+  const [messages, setMessages] = useState<any[]>([])
   const [inputValue, setInputValue] = useState("")
   const [avatarState, setAvatarState] = useState<AvatarState>("idle")
   const [voiceEnabled, setVoiceEnabled] = useState(true)
   const [isRecording, setIsRecording] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  
+  // Perfil dinámico
+  const [userProfile, setProfile] = useState({ name: "Sebastian", level: "A2" })
+  
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -27,31 +33,66 @@ export function ConversationContent() {
     scrollToBottom()
   }, [messages])
 
-  const handleSend = () => {
-    if (!inputValue.trim()) return
+  // 2. Cargar perfil desde Supabase al entrar
+  useEffect(() => {
+    async function loadData() {
+      const { data: profile } = await supabase.from('profiles').select('*').single()
+      if (profile) {
+        setProfile({ 
+          name: profile.full_name || "Sebastian", 
+          level: profile.english_level || "A2" 
+        })
+      }
+    }
+    loadData()
+  }, [])
+
+  const handleSend = async () => {
+    if (!inputValue.trim() || isLoading) return
+
+    const userContent = inputValue
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
     const newUserMessage = {
-      id: messages.length + 1,
+      id: Date.now(),
       role: "user" as const,
-      content: inputValue,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      content: userContent,
+      timestamp: timestamp,
     }
 
-    setMessages([...messages, newUserMessage])
+    setMessages(prev => [...prev, newUserMessage])
     setInputValue("")
-    setAvatarState("speaking")
+    setIsLoading(true)
+    setAvatarState("speaking") // El avatar reacciona mientras Sarah "piensa"
 
-    // Simulate bot response
-    setTimeout(() => {
+    try {
+      // 3. Llamada REAL a nuestra API de Sarah
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...messages, newUserMessage],
+          userName: userProfile.name,
+          userLevel: userProfile.level
+        }),
+      })
+
+      const data = await response.json()
+      
       const botResponse = {
-        id: messages.length + 2,
+        id: Date.now() + 1,
         role: "assistant" as const,
-        content: "That's a great response! Your grammar is improving. Let's continue practicing. What else would you like to talk about?",
+        content: data.content,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
+
       setMessages(prev => [...prev, botResponse])
+    } catch (error) {
+      console.error("Error con Sarah:", error)
+    } finally {
+      setIsLoading(false)
       setAvatarState("idle")
-    }, 2000)
+    }
   }
 
   const handleMicClick = () => {
@@ -61,7 +102,6 @@ export function ConversationContent() {
     } else {
       setIsRecording(true)
       setAvatarState("listening")
-      // Simulate recording timeout
       setTimeout(() => {
         setIsRecording(false)
         setAvatarState("idle")
@@ -82,7 +122,7 @@ export function ConversationContent() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-foreground">Conversación</h1>
-          <p className="text-sm text-muted-foreground">Practica tu inglés con tu tutor</p>
+          <p className="text-sm text-muted-foreground">Practica con Sarah, tu tutora de nivel {userProfile.level}</p>
         </div>
         <Button
           variant="ghost"
@@ -90,39 +130,36 @@ export function ConversationContent() {
           onClick={() => setVoiceEnabled(!voiceEnabled)}
           className="rounded-xl"
         >
-          {voiceEnabled ? (
-            <Volume2 className="w-5 h-5" />
-          ) : (
-            <VolumeX className="w-5 h-5" />
-          )}
+          {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
         </Button>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col lg:flex-row gap-6 min-h-0">
-        {/* Avatar Section - Hidden on small screens, visible on large */}
         <div className="hidden lg:flex lg:w-1/3 flex-col items-center justify-center bg-card rounded-2xl p-6">
           <AvatarPlaceholder state={avatarState} size="lg" />
           <div className="mt-6 text-center">
-            <h3 className="font-semibold text-foreground">Emma</h3>
+            <h3 className="font-semibold text-foreground">Sarah</h3>
             <p className="text-sm text-muted-foreground">Tu tutora de inglés</p>
           </div>
         </div>
 
-        {/* Chat Section */}
         <div className="flex-1 flex flex-col bg-card rounded-2xl overflow-hidden min-h-0">
-          {/* Mobile Avatar - Compact version */}
           <div className="lg:hidden flex items-center gap-3 p-4 border-b border-border">
             <AvatarPlaceholder state={avatarState} size="sm" />
             <div>
-              <h3 className="font-semibold text-foreground text-sm">Emma</h3>
+              <h3 className="font-semibold text-foreground text-sm">Sarah</h3>
               <p className="text-xs text-muted-foreground">Tu tutora de inglés</p>
             </div>
           </div>
 
-          {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 scrollbar-hide">
             <div className="flex flex-col gap-4">
+              {messages.length === 0 && (
+                <p className="text-center text-muted-foreground text-sm mt-4">
+                  Saluda a Sarah para comenzar la clase...
+                </p>
+              )}
               {messages.map((message) => (
                 <ChatMessage
                   key={message.id}
@@ -142,10 +179,8 @@ export function ConversationContent() {
                 variant={isRecording ? "destructive" : "secondary"}
                 size="icon"
                 onClick={handleMicClick}
-                className={cn(
-                  "rounded-xl shrink-0 transition-all",
-                  isRecording && "animate-pulse-soft"
-                )}
+                className={cn("rounded-xl shrink-0 transition-all", isRecording && "animate-pulse-soft")}
+                disabled={isLoading}
               >
                 <Mic className="w-5 h-5" />
               </Button>
@@ -153,21 +188,18 @@ export function ConversationContent() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyPress}
-                placeholder="Escribe tu mensaje en inglés..."
+                placeholder={isLoading ? "Sarah está escribiendo..." : "Escribe tu mensaje en inglés..."}
                 className="flex-1 rounded-xl"
-                disabled={isRecording}
+                disabled={isRecording || isLoading}
               />
               <Button
                 onClick={handleSend}
-                disabled={!inputValue.trim() || isRecording}
+                disabled={!inputValue.trim() || isRecording || isLoading}
                 className="rounded-xl shrink-0"
               >
                 <Send className="w-5 h-5" />
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground mt-2 text-center">
-              Presiona el micrófono para hablar o escribe tu mensaje
-            </p>
           </div>
         </div>
       </div>
