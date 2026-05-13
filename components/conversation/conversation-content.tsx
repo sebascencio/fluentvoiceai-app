@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { Send, Mic, Volume2, VolumeX, Trash2 } from "lucide-react"
+import { Send, Mic, Volume2, VolumeX, Trash2, Volume } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/custom/chat-message"
 import { AvatarPlaceholder } from "@/components/custom/avatar-placeholder"
@@ -45,9 +45,88 @@ export function ConversationContent() {
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
+  const recognitionRef = useRef<any>(null)
+  const synthesisRef = useRef<boolean>(false)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
+
+  // Inicializar Web Speech API para reconocimiento de voz
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = window.webkitSpeechRecognition || (window as any).SpeechRecognition
+      if (SpeechRecognition) {
+        recognitionRef.current = new SpeechRecognition()
+        recognitionRef.current.continuous = false
+        recognitionRef.current.interimResults = true
+        recognitionRef.current.lang = 'en-US'
+
+        recognitionRef.current.onresult = (event: any) => {
+          let transcript = ''
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript
+          }
+          setInputValue(transcript)
+        }
+
+        recognitionRef.current.onend = () => {
+          setIsRecording(false)
+          setAvatarState("idle")
+          // Enviar automáticamente si hay texto
+          if (inputValue.trim()) {
+            handleSend()
+          }
+        }
+
+        recognitionRef.current.onerror = (event: any) => {
+          console.error('[v0] Speech recognition error:', event.error)
+          setIsRecording(false)
+          setAvatarState("idle")
+        }
+      }
+    }
+  }, [inputValue])
+
+  // Función para sintetizar voz
+  const speakMessage = (text: string) => {
+    if (!voiceEnabled || !text.trim()) return
+
+    // Extraer solo la parte en inglés (antes del primer párrafo en español)
+    const englishMatch = text.match(/^(.*?)(?:\n\n|Por cierto|Ojo:|Un tip|Estuvo|$)/i)
+    const englishText = englishMatch ? englishMatch[1].trim() : text
+
+    const utterance = new SpeechSynthesisUtterance(englishText)
+    utterance.lang = 'en-US'
+    utterance.rate = 0.9
+    utterance.pitch = 1.1
+    utterance.volume = 1
+
+    // Seleccionar voz femenina si está disponible
+    const voices = window.speechSynthesis.getVoices()
+    const femaleVoice = voices.find((voice: any) => 
+      voice.lang.includes('en') && voice.name.toLowerCase().includes('female')
+    ) || voices.find((voice: any) => voice.lang.includes('en'))
+    
+    if (femaleVoice) {
+      utterance.voice = femaleVoice
+    }
+
+    utterance.onstart = () => {
+      synthesisRef.current = true
+    }
+
+    utterance.onend = () => {
+      synthesisRef.current = false
+    }
+
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utterance)
+  }
+
+  // Función para repetir el audio de un mensaje
+  const handleRepeatAudio = (content: string) => {
+    speakMessage(content)
   }
 
   useEffect(() => {
@@ -247,6 +326,11 @@ export function ConversationContent() {
       }
 
       setMessages(prev => [...prev, botResponse])
+      
+      // Leer la respuesta automáticamente si la voz está habilitada
+      if (voiceEnabled) {
+        speakMessage(botContent)
+      }
     } catch (error) {
       console.error("Error con Sarah:", error)
       
@@ -265,15 +349,17 @@ export function ConversationContent() {
 
   const handleMicClick = () => {
     if (isRecording) {
+      recognitionRef.current?.stop()
       setIsRecording(false)
       setAvatarState("idle")
     } else {
-      setIsRecording(true)
-      setAvatarState("listening")
-      setTimeout(() => {
-        setIsRecording(false)
-        setAvatarState("idle")
-      }, 3000)
+      try {
+        recognitionRef.current?.start()
+        setIsRecording(true)
+        setAvatarState("listening")
+      } catch (error) {
+        console.error('[v0] Error starting speech recognition:', error)
+      }
     }
   }
 
@@ -349,6 +435,7 @@ export function ConversationContent() {
                   content={message.content}
                   role={message.role}
                   timestamp={message.timestamp}
+                  onRepeatAudio={message.role === "assistant" ? handleRepeatAudio : undefined}
                 />
               ))}
               {isLoading && (
