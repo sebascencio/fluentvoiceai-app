@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
-import { Send, Mic, Volume2, VolumeX, Trash2, Volume } from "lucide-react"
+import { useState, useRef, useEffect, useCallback } from "react"
+import { Send, Mic, MicOff, Volume2, VolumeX, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/custom/chat-message"
 import { AvatarPlaceholder } from "@/components/custom/avatar-placeholder"
@@ -46,87 +46,195 @@ export function ConversationContent() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
   const recognitionRef = useRef<any>(null)
-  const synthesisRef = useRef<boolean>(false)
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastTranscriptRef = useRef<string>("")
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
-  // Inicializar Web Speech API para reconocimiento de voz
+  // Función para enviar mensaje (declarada antes de useEffect)
+  const sendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || isLoading) return
+    
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    const convId = await ensureConversation()
+
+    const newUserMessage: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text,
+      timestamp: timestamp,
+    }
+
+    setMessages(prev => [...prev, newUserMessage])
+    setInputValue("")
+    setIsLoading(true)
+    setAvatarState("speaking")
+
+    if (convId) {
+      const savedId = await saveMessage(convId, "user", text)
+      if (savedId) newUserMessage.id = savedId
+    }
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            ...messages.map((m) => ({ role: m.role, content: m.content })),
+            { role: "user", content: text }
+          ],
+          userName: userProfile.name,
+          userLevel: userProfile.level
+        }),
+      })
+
+      const data = await response.json()
+      const botContent = data.content || "Lo siento, hubo un problema. Intenta de nuevo."
+      
+      const botResponse: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: botContent,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+
+      if (convId) {
+        const savedBotId = await saveMessage(convId, "assistant", botContent)
+        if (savedBotId) botResponse.id = savedBotId
+      }
+
+      setMessages(prev => [...prev, botResponse])
+      
+      if (voiceEnabled) {
+        speakMessageMixed(botContent)
+      }
+    } catch (error) {
+      const errorResponse: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "Sorry, I'm having trouble connecting. Please try again in a moment.",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+      setMessages(prev => [...prev, errorResponse])
+    } finally {
+      setIsLoading(false)
+      setAvatarState("idle")
+    }
+  }, [messages, isLoading, voiceEnabled])
+
+  // Inicializar Web Speech API para reconocimiento de voz CONTINUO
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition = window.webkitSpeechRecognition || (window as any).SpeechRecognition
       if (SpeechRecognition) {
         recognitionRef.current = new SpeechRecognition()
-        recognitionRef.current.continuous = false
+        recognitionRef.current.continuous = true  // Modo continuo
         recognitionRef.current.interimResults = true
         recognitionRef.current.lang = 'en-US'
 
         recognitionRef.current.onresult = (event: any) => {
-          let transcript = ''
+          let finalTranscript = ''
+          let interimTranscript = ''
+          
           for (let i = event.resultIndex; i < event.results.length; i++) {
-            transcript += event.results[i][0].transcript
+            const transcript = event.results[i][0].transcript
+            if (event.results[i].isFinal) {
+              finalTranscript += transcript
+            } else {
+              interimTranscript += transcript
+            }
           }
-          setInputValue(transcript)
+          
+          const currentText = finalTranscript || interimTranscript
+          setInputValue(prev => {
+            const newValue = finalTranscript ? prev + finalTranscript : currentText
+            lastTranscriptRef.current = newValue
+            return newValue
+          })
+          
+          // Reiniciar timeout de silencio cada vez que hay input
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current)
+          }
+          
+          // Detectar silencio de 7 segundos
+          silenceTimeoutRef.current = setTimeout(() => {
+            if (lastTranscriptRef.current.trim()) {
+              recognitionRef.current?.stop()
+            }
+          }, 7000)
         }
 
         recognitionRef.current.onend = () => {
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current)
+          }
           setIsRecording(false)
           setAvatarState("idle")
-          // Enviar automáticamente si hay texto
-          if (inputValue.trim()) {
-            handleSend()
-          }
         }
 
         recognitionRef.current.onerror = (event: any) => {
-          console.error('[v0] Speech recognition error:', event.error)
+          if (event.error !== 'no-speech') {
+            console.error('[v0] Speech recognition error:', event.error)
+          }
           setIsRecording(false)
           setAvatarState("idle")
         }
       }
     }
-  }, [inputValue])
 
-  // Función para sintetizar voz
-  const speakMessage = (text: string) => {
+    return () => {
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Función para sintetizar voz MIXTA (inglés + español)
+  const speakMessageMixed = (text: string) => {
     if (!voiceEnabled || !text.trim()) return
 
-    // Extraer solo la parte en inglés (antes del primer párrafo en español)
-    const englishMatch = text.match(/^(.*?)(?:\n\n|Por cierto|Ojo:|Un tip|Estuvo|$)/i)
-    const englishText = englishMatch ? englishMatch[1].trim() : text
-
-    const utterance = new SpeechSynthesisUtterance(englishText)
-    utterance.lang = 'en-US'
-    utterance.rate = 0.9
-    utterance.pitch = 1.1
-    utterance.volume = 1
-
-    // Seleccionar voz femenina si está disponible
-    const voices = window.speechSynthesis.getVoices()
-    const femaleVoice = voices.find((voice: any) => 
-      voice.lang.includes('en') && voice.name.toLowerCase().includes('female')
-    ) || voices.find((voice: any) => voice.lang.includes('en'))
-    
-    if (femaleVoice) {
-      utterance.voice = femaleVoice
-    }
-
-    utterance.onstart = () => {
-      synthesisRef.current = true
-    }
-
-    utterance.onend = () => {
-      synthesisRef.current = false
-    }
-
     window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
+    
+    // Separar texto en partes de inglés y español
+    const spanishIndicators = /(?:Por cierto|Ojo:|Un tip|Estuvo|Quick tip|Nota:|En español|Pequeña nota)/i
+    const parts = text.split(spanishIndicators)
+    
+    const voices = window.speechSynthesis.getVoices()
+    const englishVoice = voices.find(v => v.lang.includes('en-US')) || voices.find(v => v.lang.includes('en'))
+    const spanishVoice = voices.find(v => v.lang.includes('es-MX')) || voices.find(v => v.lang.includes('es'))
+
+    // Primero hablar la parte en inglés
+    if (parts[0]?.trim()) {
+      const englishUtterance = new SpeechSynthesisUtterance(parts[0].trim())
+      englishUtterance.lang = 'en-US'
+      englishUtterance.rate = 0.9
+      englishUtterance.pitch = 1.1
+      if (englishVoice) englishUtterance.voice = englishVoice
+      
+      englishUtterance.onend = () => {
+        // Luego hablar la parte en español si existe
+        if (parts.length > 1 && parts[1]?.trim()) {
+          const spanishText = text.match(spanishIndicators)?.[0] + parts[1]
+          const spanishUtterance = new SpeechSynthesisUtterance(spanishText.trim())
+          spanishUtterance.lang = 'es-MX'
+          spanishUtterance.rate = 0.95
+          spanishUtterance.pitch = 1.0
+          if (spanishVoice) spanishUtterance.voice = spanishVoice
+          window.speechSynthesis.speak(spanishUtterance)
+        }
+      }
+      
+      window.speechSynthesis.speak(englishUtterance)
+    }
   }
 
   // Función para repetir el audio de un mensaje
   const handleRepeatAudio = (content: string) => {
-    speakMessage(content)
+    speakMessageMixed(content)
   }
 
   useEffect(() => {
@@ -263,103 +371,46 @@ export function ConversationContent() {
 
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return
-
-    const userContent = inputValue
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-
-    // Asegurar que existe la conversación
-    const convId = await ensureConversation()
-
-    const newUserMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: userContent,
-      timestamp: timestamp,
-    }
-
-    setMessages(prev => [...prev, newUserMessage])
-    setInputValue("")
-    setIsLoading(true)
-    setAvatarState("speaking")
-
-    // Guardar mensaje del usuario en Supabase
-    if (convId) {
-      const savedId = await saveMessage(convId, "user", userContent)
-      if (savedId) {
-        newUserMessage.id = savedId
-      }
-    }
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            ...messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            { role: "user", content: userContent }
-          ],
-          userName: userProfile.name,
-          userLevel: userProfile.level
-        }),
-      })
-
-      const data = await response.json()
-      
-      const botContent = data.content || "Lo siento, hubo un problema. Intenta de nuevo."
-      const botResponse: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: botContent,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
-
-      // Guardar respuesta de Sarah en Supabase
-      if (convId) {
-        const savedBotId = await saveMessage(convId, "assistant", botContent)
-        if (savedBotId) {
-          botResponse.id = savedBotId
-        }
-      }
-
-      setMessages(prev => [...prev, botResponse])
-      
-      // Leer la respuesta automáticamente si la voz está habilitada
-      if (voiceEnabled) {
-        speakMessage(botContent)
-      }
-    } catch (error) {
-      console.error("Error con Sarah:", error)
-      
-      const errorResponse: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "Sorry, I'm having trouble connecting. Please try again in a moment.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      }
-      setMessages(prev => [...prev, errorResponse])
-    } finally {
-      setIsLoading(false)
-      setAvatarState("idle")
-    }
+    await sendMessage(inputValue)
   }
 
   const handleMicClick = () => {
     if (isRecording) {
+      // Detener grabación y enviar si hay texto
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current)
+      }
       recognitionRef.current?.stop()
       setIsRecording(false)
       setAvatarState("idle")
+      
+      // Enviar el mensaje si hay texto
+      if (inputValue.trim()) {
+        sendMessage(inputValue)
+      }
     } else {
       try {
+        setInputValue("")
+        lastTranscriptRef.current = ""
         recognitionRef.current?.start()
         setIsRecording(true)
         setAvatarState("listening")
       } catch (error) {
         console.error('[v0] Error starting speech recognition:', error)
       }
+    }
+  }
+
+  const handleStopRecording = () => {
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current)
+    }
+    recognitionRef.current?.stop()
+    setIsRecording(false)
+    setAvatarState("idle")
+    
+    if (inputValue.trim()) {
+      sendMessage(inputValue)
     }
   }
 
@@ -457,6 +508,21 @@ export function ConversationContent() {
 
           {/* Input Area */}
           <div className="p-4 border-t border-border">
+            {/* Indicador de grabación */}
+            {isRecording && (
+              <div className="flex items-center justify-center gap-2 mb-3 py-2 px-4 bg-destructive/10 rounded-xl">
+                <span className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
+                <span className="text-sm text-destructive font-medium">Sarah te está escuchando...</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleStopRecording}
+                  className="ml-2 h-7 px-3 text-xs bg-destructive/20 hover:bg-destructive/30 text-destructive"
+                >
+                  Detener y enviar
+                </Button>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Button
                 variant={isRecording ? "destructive" : "secondary"}
@@ -465,7 +531,7 @@ export function ConversationContent() {
                 className={cn("rounded-xl shrink-0 transition-all", isRecording && "animate-pulse-soft")}
                 disabled={isLoading}
               >
-                <Mic className="w-5 h-5" />
+                {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               </Button>
               <input
                 type="text"
