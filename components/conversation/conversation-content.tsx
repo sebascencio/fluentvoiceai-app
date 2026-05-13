@@ -131,22 +131,22 @@ export function ConversationContent() {
       const SpeechRecognition = window.webkitSpeechRecognition || (window as any).SpeechRecognition
       if (SpeechRecognition) {
         recognitionRef.current = new SpeechRecognition()
-        recognitionRef.current.continuous = false  // Mejor reconocimiento con modo no continuo
-        recognitionRef.current.interimResults = true
+        recognitionRef.current.continuous = false
+        recognitionRef.current.interimResults = false  // Solo resultados finales para evitar duplicación
         recognitionRef.current.lang = 'en-US'
         recognitionRef.current.maxAlternatives = 1
 
         recognitionRef.current.onresult = (event: any) => {
-          let transcript = ''
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            transcript = event.results[i][0].transcript
+          // Tomar solo el último resultado final
+          const lastResult = event.results[event.results.length - 1]
+          if (lastResult.isFinal || !recognitionRef.current.interimResults) {
+            const transcript = lastResult[0].transcript.trim()
+            setInputValue(transcript)
+            lastTranscriptRef.current = transcript
           }
-          setInputValue(transcript)
-          lastTranscriptRef.current = transcript
         }
 
         recognitionRef.current.onend = () => {
-          // Solo limpiar el timeout, NO enviar automáticamente
           if (silenceTimeoutRef.current) {
             clearTimeout(silenceTimeoutRef.current)
           }
