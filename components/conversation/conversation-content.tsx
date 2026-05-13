@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect, useCallback } from "react"
-import { Send, Mic, MicOff, Volume2, VolumeX, Trash2 } from "lucide-react"
+import { Send, Mic, MicOff, Volume2, VolumeX, Trash2, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage } from "@/components/custom/chat-message"
 import { AvatarPlaceholder } from "@/components/custom/avatar-placeholder"
@@ -125,50 +125,28 @@ export function ConversationContent() {
     }
   }, [messages, isLoading, voiceEnabled])
 
-  // Inicializar Web Speech API para reconocimiento de voz CONTINUO
+  // Inicializar Web Speech API para reconocimiento de voz
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition = window.webkitSpeechRecognition || (window as any).SpeechRecognition
       if (SpeechRecognition) {
         recognitionRef.current = new SpeechRecognition()
-        recognitionRef.current.continuous = true  // Modo continuo
+        recognitionRef.current.continuous = false  // Mejor reconocimiento con modo no continuo
         recognitionRef.current.interimResults = true
         recognitionRef.current.lang = 'en-US'
+        recognitionRef.current.maxAlternatives = 1
 
         recognitionRef.current.onresult = (event: any) => {
-          let finalTranscript = ''
-          let interimTranscript = ''
-          
+          let transcript = ''
           for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript
-            if (event.results[i].isFinal) {
-              finalTranscript += transcript
-            } else {
-              interimTranscript += transcript
-            }
+            transcript = event.results[i][0].transcript
           }
-          
-          const currentText = finalTranscript || interimTranscript
-          setInputValue(prev => {
-            const newValue = finalTranscript ? prev + finalTranscript : currentText
-            lastTranscriptRef.current = newValue
-            return newValue
-          })
-          
-          // Reiniciar timeout de silencio cada vez que hay input
-          if (silenceTimeoutRef.current) {
-            clearTimeout(silenceTimeoutRef.current)
-          }
-          
-          // Detectar silencio de 7 segundos
-          silenceTimeoutRef.current = setTimeout(() => {
-            if (lastTranscriptRef.current.trim()) {
-              recognitionRef.current?.stop()
-            }
-          }, 7000)
+          setInputValue(transcript)
+          lastTranscriptRef.current = transcript
         }
 
         recognitionRef.current.onend = () => {
+          // Solo limpiar el timeout, NO enviar automáticamente
           if (silenceTimeoutRef.current) {
             clearTimeout(silenceTimeoutRef.current)
           }
@@ -177,7 +155,7 @@ export function ConversationContent() {
         }
 
         recognitionRef.current.onerror = (event: any) => {
-          if (event.error !== 'no-speech') {
+          if (event.error !== 'no-speech' && event.error !== 'aborted') {
             console.error('[v0] Speech recognition error:', event.error)
           }
           setIsRecording(false)
@@ -193,42 +171,100 @@ export function ConversationContent() {
     }
   }, [])
 
-  // Función para sintetizar voz MIXTA (inglés + español)
+  // Función para sintetizar voz MIXTA (inglés + español) con voz femenina
   const speakMessageMixed = (text: string) => {
     if (!voiceEnabled || !text.trim()) return
 
     window.speechSynthesis.cancel()
     
-    // Separar texto en partes de inglés y español
-    const spanishIndicators = /(?:Por cierto|Ojo:|Un tip|Estuvo|Quick tip|Nota:|En español|Pequeña nota)/i
-    const parts = text.split(spanishIndicators)
-    
-    const voices = window.speechSynthesis.getVoices()
-    const englishVoice = voices.find(v => v.lang.includes('en-US')) || voices.find(v => v.lang.includes('en'))
-    const spanishVoice = voices.find(v => v.lang.includes('es-MX')) || voices.find(v => v.lang.includes('es'))
-
-    // Primero hablar la parte en inglés
-    if (parts[0]?.trim()) {
-      const englishUtterance = new SpeechSynthesisUtterance(parts[0].trim())
-      englishUtterance.lang = 'en-US'
-      englishUtterance.rate = 0.9
-      englishUtterance.pitch = 1.1
-      if (englishVoice) englishUtterance.voice = englishVoice
+    // Esperar a que las voces estén cargadas
+    const loadVoicesAndSpeak = () => {
+      const voices = window.speechSynthesis.getVoices()
       
-      englishUtterance.onend = () => {
-        // Luego hablar la parte en español si existe
-        if (parts.length > 1 && parts[1]?.trim()) {
-          const spanishText = text.match(spanishIndicators)?.[0] + parts[1]
-          const spanishUtterance = new SpeechSynthesisUtterance(spanishText.trim())
-          spanishUtterance.lang = 'es-MX'
-          spanishUtterance.rate = 0.95
-          spanishUtterance.pitch = 1.0
-          if (spanishVoice) spanishUtterance.voice = spanishVoice
-          window.speechSynthesis.speak(spanishUtterance)
+      // Buscar voz femenina en inglés (priorizar Samantha, Google US English Female, etc.)
+      const englishFemaleVoice = voices.find(v => 
+        v.lang.includes('en-US') && (
+          v.name.toLowerCase().includes('samantha') ||
+          v.name.toLowerCase().includes('female') ||
+          v.name.toLowerCase().includes('woman') ||
+          v.name.toLowerCase().includes('google us english')
+        )
+      ) || voices.find(v => 
+        v.lang.includes('en-US') && v.name.toLowerCase().includes('google')
+      ) || voices.find(v => v.lang.includes('en-US')) 
+        || voices.find(v => v.lang.includes('en'))
+      
+      // Buscar voz femenina en español (priorizar Paulina, Monica, etc.)
+      const spanishFemaleVoice = voices.find(v => 
+        (v.lang.includes('es-MX') || v.lang.includes('es-ES') || v.lang.includes('es')) && (
+          v.name.toLowerCase().includes('paulina') ||
+          v.name.toLowerCase().includes('monica') ||
+          v.name.toLowerCase().includes('female') ||
+          v.name.toLowerCase().includes('google español')
+        )
+      ) || voices.find(v => v.lang.includes('es-MX'))
+        || voices.find(v => v.lang.includes('es'))
+      
+      // Separar texto en partes de inglés y español
+      const spanishIndicators = /(Por cierto|Ojo:|Un tip|Estuvo|Quick tip|Nota:|En español|Pequeña nota|Actually,)/i
+      const match = text.match(spanishIndicators)
+      
+      let englishText = text
+      let spanishText = ''
+      
+      if (match && match.index !== undefined) {
+        // Si el indicador está al principio (como "Actually,"), todo es inglés
+        if (match[0].toLowerCase() === 'actually,') {
+          englishText = text
+          spanishText = ''
+        } else {
+          englishText = text.substring(0, match.index).trim()
+          spanishText = text.substring(match.index).trim()
         }
       }
-      
-      window.speechSynthesis.speak(englishUtterance)
+
+      // Hablar la parte en inglés
+      if (englishText) {
+        const englishUtterance = new SpeechSynthesisUtterance(englishText)
+        englishUtterance.lang = 'en-US'
+        englishUtterance.rate = 0.85
+        englishUtterance.pitch = 1.15
+        englishUtterance.volume = 1
+        if (englishFemaleVoice) englishUtterance.voice = englishFemaleVoice
+        
+        englishUtterance.onend = () => {
+          // Luego hablar la parte en español si existe
+          if (spanishText) {
+            setTimeout(() => {
+              const spanishUtterance = new SpeechSynthesisUtterance(spanishText)
+              spanishUtterance.lang = 'es-MX'
+              spanishUtterance.rate = 0.9
+              spanishUtterance.pitch = 1.1
+              spanishUtterance.volume = 1
+              if (spanishFemaleVoice) spanishUtterance.voice = spanishFemaleVoice
+              window.speechSynthesis.speak(spanishUtterance)
+            }, 300) // Pequeña pausa entre idiomas
+          }
+        }
+        
+        window.speechSynthesis.speak(englishUtterance)
+      } else if (spanishText) {
+        // Si solo hay español
+        const spanishUtterance = new SpeechSynthesisUtterance(spanishText)
+        spanishUtterance.lang = 'es-MX'
+        spanishUtterance.rate = 0.9
+        spanishUtterance.pitch = 1.1
+        spanishUtterance.volume = 1
+        if (spanishFemaleVoice) spanishUtterance.voice = spanishFemaleVoice
+        window.speechSynthesis.speak(spanishUtterance)
+      }
+    }
+
+    // Las voces pueden no estar cargadas inmediatamente
+    if (window.speechSynthesis.getVoices().length > 0) {
+      loadVoicesAndSpeak()
+    } else {
+      window.speechSynthesis.onvoiceschanged = loadVoicesAndSpeak
     }
   }
 
@@ -376,18 +412,10 @@ export function ConversationContent() {
 
   const handleMicClick = () => {
     if (isRecording) {
-      // Detener grabación y enviar si hay texto
-      if (silenceTimeoutRef.current) {
-        clearTimeout(silenceTimeoutRef.current)
-      }
+      // Solo pausar la grabación, NO enviar
       recognitionRef.current?.stop()
       setIsRecording(false)
       setAvatarState("idle")
-      
-      // Enviar el mensaje si hay texto
-      if (inputValue.trim()) {
-        sendMessage(inputValue)
-      }
     } else {
       try {
         setInputValue("")
@@ -401,10 +429,8 @@ export function ConversationContent() {
     }
   }
 
-  const handleStopRecording = () => {
-    if (silenceTimeoutRef.current) {
-      clearTimeout(silenceTimeoutRef.current)
-    }
+  // Función para detener y enviar
+  const handleStopAndSend = () => {
     recognitionRef.current?.stop()
     setIsRecording(false)
     setAvatarState("idle")
@@ -412,6 +438,14 @@ export function ConversationContent() {
     if (inputValue.trim()) {
       sendMessage(inputValue)
     }
+  }
+
+  // Función para solo pausar sin enviar
+  const handlePauseRecording = () => {
+    recognitionRef.current?.stop()
+    setIsRecording(false)
+    setAvatarState("idle")
+    // No enviar, solo pausar - el texto queda en el input para editar
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -508,19 +542,34 @@ export function ConversationContent() {
 
           {/* Input Area */}
           <div className="p-4 border-t border-border">
-            {/* Indicador de grabación */}
+            {/* Indicador de grabación con opciones */}
             {isRecording && (
-              <div className="flex items-center justify-center gap-2 mb-3 py-2 px-4 bg-destructive/10 rounded-xl">
-                <span className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
-                <span className="text-sm text-destructive font-medium">Sarah te está escuchando...</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleStopRecording}
-                  className="ml-2 h-7 px-3 text-xs bg-destructive/20 hover:bg-destructive/30 text-destructive"
-                >
-                  Detener y enviar
-                </Button>
+              <div className="flex items-center justify-between gap-2 mb-3 py-2 px-4 bg-destructive/10 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 bg-destructive rounded-full animate-pulse" />
+                  <span className="text-sm text-destructive font-medium">Sarah te está escuchando...</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePauseRecording}
+                    className="h-7 px-3 text-xs bg-muted hover:bg-muted/80 text-muted-foreground"
+                  >
+                    <Square className="w-3 h-3 mr-1" />
+                    Pausar
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleStopAndSend}
+                    className="h-7 px-3 text-xs"
+                    disabled={!inputValue.trim()}
+                  >
+                    <Send className="w-3 h-3 mr-1" />
+                    Enviar
+                  </Button>
+                </div>
               </div>
             )}
             <div className="flex items-center gap-2">
