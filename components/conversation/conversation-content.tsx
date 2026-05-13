@@ -39,6 +39,7 @@ export function ConversationContent() {
   const [sessionId, setSessionId] = useState<string>("")
   const [showToast, setShowToast] = useState(false)
   const [toastMessage, setToastMessage] = useState("")
+  const [micPermissionDenied, setMicPermissionDenied] = useState(false)
   
   // Perfil del usuario
   const userProfile = { name: "Usuario", level: "A2" }
@@ -155,7 +156,12 @@ export function ConversationContent() {
         }
 
         recognitionRef.current.onerror = (event: any) => {
-          if (event.error !== 'no-speech' && event.error !== 'aborted') {
+          if (event.error === 'not-allowed') {
+            setMicPermissionDenied(true)
+            setToastMessage('Permiso de micrófono denegado. Haz clic en el icono de candado en la barra de direcciones para habilitarlo.')
+            setShowToast(true)
+            setTimeout(() => setShowToast(false), 5000)
+          } else if (event.error !== 'no-speech' && event.error !== 'aborted') {
             console.error('[v0] Speech recognition error:', event.error)
           }
           setIsRecording(false)
@@ -410,21 +416,49 @@ export function ConversationContent() {
     await sendMessage(inputValue)
   }
 
-  const handleMicClick = () => {
+  const handleMicClick = async () => {
     if (isRecording) {
       // Solo pausar la grabación, NO enviar
       recognitionRef.current?.stop()
       setIsRecording(false)
       setAvatarState("idle")
     } else {
+      // Verificar si el reconocimiento de voz está disponible
+      if (!recognitionRef.current) {
+        setToastMessage('Tu navegador no soporta reconocimiento de voz')
+        setShowToast(true)
+        setTimeout(() => setShowToast(false), 3000)
+        return
+      }
+
+      // Si el permiso fue denegado antes, mostrar mensaje
+      if (micPermissionDenied) {
+        setToastMessage('Permiso de micrófono denegado. Habilítalo en la configuración del navegador.')
+        setShowToast(true)
+        setTimeout(() => setShowToast(false), 4000)
+        return
+      }
+
       try {
+        // Solicitar permiso de micrófono primero
+        await navigator.mediaDevices.getUserMedia({ audio: true })
+        
         setInputValue("")
         lastTranscriptRef.current = ""
-        recognitionRef.current?.start()
+        recognitionRef.current.start()
         setIsRecording(true)
         setAvatarState("listening")
-      } catch (error) {
-        console.error('[v0] Error starting speech recognition:', error)
+      } catch (error: any) {
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          setMicPermissionDenied(true)
+          setToastMessage('Permiso de micrófono denegado. Habilítalo en la configuración del navegador.')
+        } else {
+          setToastMessage('Error al acceder al micrófono: ' + error.message)
+        }
+        setShowToast(true)
+        setTimeout(() => setShowToast(false), 4000)
+        setIsRecording(false)
+        setAvatarState("idle")
       }
     }
   }
