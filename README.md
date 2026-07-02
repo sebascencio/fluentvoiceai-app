@@ -9,7 +9,7 @@
 
 ## 📋 Descripción General
 
-**FluentVoice AI** es una Aplicación Web Progresiva (PWA) de nivel premium diseñada para revolucionar el aprendizaje autónomo del idioma inglés mediante la práctica conversacional en tiempo real. La plataforma ofrece una interfaz minimalista, limpia y fluida donde el usuario interactúa con un tutor de Inteligencia Artificial mediante voz y texto.
+**FluentVoice AI** es una Aplicación Web Progresiva (PWA) diseñada para el aprendizaje autónomo del idioma inglés mediante la práctica conversacional en tiempo real. La plataforma ofrece una interfaz minimalista, limpia y fluida donde el usuario interactúa con un tutor de Inteligencia Artificial mediante voz y texto.
 
 El núcleo del sistema combina modelos de lenguaje alojados en **Groq**, persistencia relacional en tiempo real con **Supabase**, y un motor híbrido de procesamiento de voz nativo que elimina la fricción de uso habitual en plataformas de idiomas tradicionales.
 
@@ -82,8 +82,8 @@ Sigue estos pasos para levantar el entorno de desarrollo local:
 
 1. **Clonar el repositorio:**
    ```bash
-   git clone https://github.com/tu-usuario/tu-repositorio.git
-   cd tu-repositorio
+   git clone https://github.com/sebascencio/fluentvoiceai-app.git
+   cd fluentvoiceai-app
    ```
 
 2. **Instalar dependencias:**
